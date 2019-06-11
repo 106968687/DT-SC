@@ -1,0 +1,227 @@
+pragma solidity ^0.4.16;
+
+contract DataTradingModeSC{
+    bool public scstatus;
+	address public owner;
+    string public DTCName;
+    uint public numberOfDOs;
+    mapping (address => uint) public dataownerId;
+    DO[] public dataowners;
+    string public IPFSHash;//the ipfs hash of the data trading agreement 
+	address public ABRaddress; 
+	address public DSSPaddress;	
+    address public DOaddress;	
+    string public dataname;	
+	enum contractStatus{ WaitingforDP, Terminated}
+	contractStatus public status;
+	enum DPStatus{DPPaid, DODeposited, DPReceivedHashandToken, DownloadConfirmedbyDSSP,
+                   SuccessfulTrading, CannotDownload, DataUnavailable,TradingCompleted, Refunded}
+	uint public numberOfDPs;   
+    uint public timeliness = 7;//7 days
+	uint public dataprice;
+	string public datastoragehash;//the ipfs hash of the data storage 
+	mapping (address => DP) public datapurchasers;	    	
+		
+    event DOAdded(address DataOwnerAddress, string DataProduct, string DataNotes);
+    event DORemoved(address DOAddress);
+    event StatusChanged(string Status);
+    event DPPaid(address datapurchaser, string info);    
+	event DODeposited(string info,address datapurchaser);
+    event tokenGeneratedforDP(address datapurchaser, bytes32 token, uint timestamp, uint duration);
+    event DPDownloadedDatafromDSSP(address datapurchaser, string info);
+    event successfulTrading(address datapurchaser);
+    event unsuccessfulTradingDPCannotDownload(address datapurchaser, string info);
+	event unsuccessfulTradingDPDataUnavailable(address datapurchaser, string info);
+    event ABRIsVerifyingforDP(address datapurchaser, string info, bytes32 token);
+    event refundDone(address datapurchaser);
+	event DPCouldNotDownload(address datapurchaser, string info);
+	event DPDataUnavailable(address datapurchaser, string info);	
+    event paymentSettled(address datapurchaser, string info);
+    event refundBasedonDPRequest(string info, address datapurchaser);
+	
+    struct DO {
+        address dataowner;
+	    string dataproduct;
+	    string datanotes;
+	    uint dataownerSince;
+    }
+    struct DP {
+        DPStatus status;
+        int result;
+        bytes32 token;        
+    }
+   
+    modifier OnlyOwner {
+        require (msg.sender == owner);
+	    _;
+    }
+	modifier NotOwner(){
+        require(msg.sender != owner);
+        _;
+    }
+    modifier OnlyDSSP(){
+        require(msg.sender == DSSPaddress);
+        _;
+    }
+	modifier NotDSSP(){
+        require(msg.sender != DSSPaddress);
+        _;
+    }
+    modifier OnlyABR(){
+        require(msg.sender == ABRaddress);
+        _;
+    }
+	modifier NotABR(){
+        require(msg.sender != ABRaddress);
+        _;
+    }
+	modifier NotDO(){
+        require(msg.sender != DOaddress);
+        _;
+    }
+    modifier DPPayment(){
+        require(msg.value == dataprice);
+        _;
+    }       
+   
+	modifier DODeposit(){
+        require(msg.value == dataprice);
+        _;
+    }	
+	
+    function DataTradingModeSC(string enterDTCName, string dataName) public {
+        owner = 0xd813351258D8A53314E55b12c3Cf11C98dA8E7D4;
+		DSSPaddress = 0x380851065aBf6F833eFBE9e059aF9D2F31baCD54;
+		ABRaddress = 0xd06B32822f5F1838E0Bb05CBEC803889eFDd9380;		
+		DOaddress = 0x09BdFdBAc10253e988b4c7197f0faf44Ea7F8479;
+		//DPaddress = 0x9549E34316ab06B205711B2eF1Ea5D078C6e8E5f;
+		dataprice = 3 ether;
+		datastoragehash = "QmbFMke1KXqnYyBBWxB74N4c5SBnJMVAiMNRcGu6x1AwQH";
+		IPFSHash = "QmPvqGheEUnHdacVPoL69KMnkNsQUCvxQ5SF8cfmZkHuQg";
+	    scstatus = true;
+	    addDO(0,"","");
+	    DTCName = enterDTCName;
+		dataname = dataName;
+        numberOfDOs = 0;	
+        numberOfDPs = 0;        	
+    }
+    function changeSmartContractStatus (bool deactivate) OnlyOwner public {
+        if (deactivate)
+	    {scstatus = false;}
+	    StatusChanged ("The smart contract deactivated.");
+    }
+    function addDO (address dataOwnerAddress, string dataProduct, string dataNotes) OnlyOwner public {
+        require (scstatus = true);
+	    uint id = dataownerId[dataOwnerAddress];
+	    if (id == 0) {
+	    dataownerId[dataOwnerAddress] = dataowners.length;
+	    id = dataowners.length++;
+	}
+	    dataowners[id] = DO ({dataowner: dataOwnerAddress, dataownerSince: now, dataproduct: dataProduct, datanotes: dataNotes});
+        DOAdded (dataOwnerAddress, dataProduct, dataNotes);
+	    numberOfDOs++;
+    }
+    function removeDO (address dataOwnerAddress) OnlyOwner public {
+        require (dataownerId[dataOwnerAddress] != 0);
+	    for (uint i = dataownerId[dataOwnerAddress]; i < dataowners.length-1; i++){
+	    dataowners[i] = dataowners[i+1];
+	}
+	    delete dataowners[dataowners.length-1];
+	    dataowners.length--;
+	    DORemoved(dataOwnerAddress);
+	    numberOfDOs--;
+    }	
+    function RequestGetData() NotOwner NotDSSP NotABR NotDO DPPayment public payable{//only the data purchaser
+        require(status == contractStatus.WaitingforDP);
+        datapurchasers[msg.sender].status = DPStatus.DPPaid;
+        DPPaid(msg.sender, "The data purchaser has paid for the data price.");
+        numberOfDPs++;
+    } 	
+	function payDeposit(address datapurchaser) DODeposit public payable{//the data owner pay the trading deposit
+        require(msg.sender == DOaddress); 			
+        if(datapurchasers[datapurchaser].status == DPStatus.DPPaid){          
+		  DODeposited("Trading with the data purchaser", datapurchaser);		  	
+          datapurchasers[datapurchaser].status = DPStatus.DODeposited;
+          generateDownloadDataToken(datapurchaser, timeliness);
+        }	
+    }  
+	function purchaserRefund()NotABR NotDSSP NotOwner NotDO public payable{ //only the data purchaser       
+		require(datapurchasers[msg.sender].status == DPStatus.DPPaid);		
+        uint x = dataprice;
+        msg.sender.transfer(x); 
+        datapurchasers[msg.sender].status = DPStatus.Refunded;
+        refundBasedonDPRequest("The data purchaser has been refunded.", msg.sender);
+    }
+	function generateDownloadDataToken(address datapurchaser,uint Timeliness) internal{ //the smart contract internal call 
+        require(datapurchasers[datapurchaser].status == DPStatus.DODeposited);
+        bytes32 token = keccak256(datapurchaser,DOaddress,owner,dataname,block.timestamp,Timeliness);//the unique token for each data purchaser
+        datapurchasers[datapurchaser].token = token;
+        tokenGeneratedforDP(datapurchaser, token, block.timestamp, timeliness);
+        datapurchasers[datapurchaser].status = DPStatus.DPReceivedHashandToken;//the data purchaser received the hash and token 
+    }
+	function sendDownloadedInformation(address datapurchaser) OnlyDSSP public payable{ //the data purchaser has downloaded the data
+        require(datapurchasers[datapurchaser].status == DPStatus.DPReceivedHashandToken);
+        DPDownloadedDatafromDSSP(datapurchaser, "The data purchaser has done download.");
+        datapurchasers[datapurchaser].status = DPStatus.DownloadConfirmedbyDSSP;
+    }
+	function DPComfirmedResult(int result) NotDSSP NotABR NotOwner NotDO public{//only the data purchaser
+        require (datapurchasers[msg.sender].status == DPStatus.DownloadConfirmedbyDSSP);
+        if(result == 1)//1 represents a successful trading
+        {
+          successfulTrading(msg.sender);
+          datapurchasers[msg.sender].status = DPStatus.SuccessfulTrading;
+          settlementAndPayment(msg.sender);
+        }
+        else if(result == 2){//2 represents the data purchaser can not download controversy
+          unsuccessfulTradingDPCannotDownload(msg.sender,"The data can not download.");
+          datapurchasers[msg.sender].status = DPStatus.CannotDownload;
+          ABRIsVerifyingforDP(msg.sender, "Token: ", datapurchasers[msg.sender].token);
+        }
+		else if(result == 3){//3 represents the data is unavailable controversy
+		  unsuccessfulTradingDPDataUnavailable(msg.sender, "The data is inconsistent with its description");
+		  datapurchasers[msg.sender].status = DPStatus.DataUnavailable;
+          ABRIsVerifyingforDP(msg.sender, "Off-chain testing data and Token: ", datapurchasers[msg.sender].token);
+		}
+        
+    }
+	function downloadControversyResolutionAndPayment(address datapurchaser, bool arbitrationResult) OnlyABR public payable{//the data download controversy resolution
+        require(datapurchasers[datapurchaser].status == DPStatus.CannotDownload);		
+        if(arbitrationResult){//data cannot download
+           DPCouldNotDownload(datapurchaser, "The data purchaser should be refunded.");
+		   uint x = dataprice;
+           datapurchaser.transfer(x);//refund the data purchaser           
+		   DOaddress.transfer(x);//refund the data owner
+           refundDone(datapurchaser);
+           datapurchasers[datapurchaser].status = DPStatus.TradingCompleted;
+        }
+        else{//the data can be downloaded
+          successfulTrading(datapurchaser);
+		  datapurchasers[datapurchaser].status = DPStatus.SuccessfulTrading;
+          settlementAndPayment(datapurchaser);            
+        }
+    }
+	function availabilityControversyResolutionAndPayment(address datapurchaser, bool arbitrationResult) OnlyABR public payable{//the data availability controversy resolution
+        require(datapurchasers[datapurchaser].status == DPStatus.DataUnavailable);		
+        if(arbitrationResult){//the data is unavailable
+           DPDataUnavailable(datapurchaser, "The data purchaser should be refunded and compensated.");
+		   uint x = dataprice;
+           datapurchaser.transfer(x*2);//refund and compensate the data purchaser          		   
+           refundDone(datapurchaser);
+           datapurchasers[datapurchaser].status = DPStatus.TradingCompleted;
+        }
+        else{//the data is available
+          successfulTrading(datapurchaser);
+		  datapurchasers[datapurchaser].status = DPStatus.SuccessfulTrading;
+          settlementAndPayment(datapurchaser);            
+        }
+    }
+	function settlementAndPayment(address datapurchaser) internal{//the smart contract internal call
+        require(datapurchasers[datapurchaser].status == DPStatus.SuccessfulTrading);
+        uint x = dataprice/3;
+        DSSPaddress.transfer(x); //pay the data storage service provider
+        owner.transfer(x); //pay the data trading center
+		DOaddress.transfer(x+x*3); //pay the data owner and return deposit
+        paymentSettled(datapurchaser, "Payment and settlement has done successfully.");
+        datapurchasers[datapurchaser].status = DPStatus.TradingCompleted;
+    }	
+}
